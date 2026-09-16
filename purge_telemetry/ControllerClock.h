@@ -1,7 +1,7 @@
 #pragma once
 #include "esp01/Protocol.h"
 
-// Wall-clock history only: never use this API for relay/debounce/safety timing.
+// Wall-clock history and command freshness; relay/debounce timing stays on millis().
 // Extended monotonic milliseconds avoid losing elapsed time after 49.7 days.
 class ControllerClock {
  public:

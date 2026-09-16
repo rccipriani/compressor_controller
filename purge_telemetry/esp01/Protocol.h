@@ -47,3 +47,21 @@ inline bool parseDecimal(const char* text, uint32_t& value) {
   }
   value = n; return true;
 }
+
+// Shared bounds are enforced again by the physical controller.
+const uint32_t DEFAULT_PURGE_DURATION_MS = 5000;
+const uint32_t MIN_PURGE_DURATION_MS = 1000;
+const uint32_t MAX_PURGE_DURATION_MS = 30000;
+inline bool validPurgeDuration(uint32_t value) {
+  return value >= MIN_PURGE_DURATION_MS && value <= MAX_PURGE_DURATION_MS;
+}
+// Timestamp is the request ID. Duration commands append one decimal value.
+inline bool parseRemoteRequest(char* text, bool durationCommand, uint32_t& epoch, uint32_t& duration) {
+  size_t length = strlen(text);
+  if (durationCommand) {
+    if (length < 12 || length > 16 || text[10] != ' ') return false;
+    text[10] = 0;
+    if (!parseDecimal(text + 11, duration)) return false;
+  } else if (length != 10) return false;
+  return parseDecimal(text, epoch);
+}

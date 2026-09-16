@@ -42,5 +42,56 @@ int main() {
  assert(mqtt.publications==1); // no queue growth while PUBACK is absent
  inFlight=0; topicIndex=4; testMillis=40000; publishNext();
  assert(mqtt.lastTopic.find("controller/available")!=std::string::npos && mqtt.lastPayload=="false");
- std::cout<<"PASS: gateway history/validity parsing, no cold-boot TIME, NTP/GET TIME, disabled/retained commands, bounded MQTT publication, stale Uno availability\n";
+ // Fresh non-retained timestamp maps to exactly one bounded UART command.
+ lastSeen=testMillis; strcpy(state,"IDLE"); Serial.tx.clear();
+ char id[11]; snprintf(id,sizeof id,"%lu",(unsigned long)time(nullptr));
+ properties.retain=true;
+ onMessage(purgeCommand,id,properties,10,0,10); assert(!pendingPurge);
+ properties.retain=false;
+ onMessage(purgeCommand,id,properties,5,0,10); assert(!pendingPurge);
+ onMessage(purgeCommand,(char*)"1000000000",properties,10,0,10); assert(!pendingPurge);
+ onMessage(purgeCommand,id,properties,10,0,10); assert(pendingPurge);
+ serviceSerial(testMillis);
+ assert(Serial.tx==std::string("CMD purge ")+id+"\n" && !pendingPurge);
+ testMillis+=6000; lastSeen=testMillis;
+ onMessage(purgeCommand,id,properties,10,0,10); assert(!pendingPurge);
+ char ack[64]; snprintf(ack,sizeof ack,"ACK purge %s accepted",id); receive(ack);
+ inFlight=0; publishNext();
+ assert(mqtt.lastTopic.find("command/purge_result")!=std::string::npos);
+ assert(mqtt.lastPayload==std::string(id)+" accepted");
+ // Report only controller-confirmed settings, clearing stale retained values.
+ receive("CONFIG duration_ms=7500"); assert(haveConfig && configuredDuration==7500);
+ receive("CONFIG duration_ms=30001"); assert(configuredDuration==7500);
+ receive("CONFIG duration_ms=1000 extra"); assert(configuredDuration==7500);
+ inFlight=0; topicIndex=29; testMillis+=100; publishNext();
+ assert(mqtt.lastPayload=="7500" && mqtt.lastTopic.find("purge/duration_ms")!=std::string::npos);
+ testMillis+=16000; inFlight=0; topicIndex=29; publishNext(); assert(mqtt.lastPayload.empty());
+ // A duration request may be made while purging, but must be fresh and bounded.
+ lastSeen=testMillis; strcpy(state,"PURGING"); Serial.tx.clear();
+ snprintf(id,sizeof id,"%lu",(unsigned long)time(nullptr));
+ char command[32]; snprintf(command,sizeof command,"%s 12000",id);
+ properties.retain=true;
+ onMessage(durationCommand,command,properties,16,0,16); assert(!pendingPurge);
+ properties.retain=false;
+ onMessage(durationCommand,command,properties,8,0,16); assert(!pendingPurge);
+ snprintf(command,sizeof command,"%s 30001",id);
+ onMessage(durationCommand,command,properties,16,0,16); assert(!pendingPurge);
+ snprintf(command,sizeof command,"%s 12000",id);
+ onMessage(durationCommand,command,properties,16,0,16); assert(pendingPurge && pendingIsDuration);
+ serviceSerial(testMillis);
+ assert(Serial.tx==std::string("CMD duration ")+id+" 12000\n");
+ assert(configuredDuration==7500); // sending is not confirmation
+ snprintf(ack,sizeof ack,"ACK duration %s accepted",id); receive(ack);
+ inFlight=0; testMillis+=100; publishNext();
+ assert(mqtt.lastTopic.find("command/duration_result")!=std::string::npos);
+ receive("CONFIG duration_ms=12000"); assert(configuredDuration==12000);
+ testMillis+=6000; lastSeen=testMillis;
+ onMessage(durationCommand,command,properties,16,0,16); assert(!pendingPurge);
+ // An unsent command expires instead of waiting for later reconnection.
+ snprintf(id,sizeof id,"%lu",(unsigned long)time(nullptr));
+ snprintf(command,sizeof command,"%s 1000",id);
+ onMessage(durationCommand,command,properties,15,0,15); assert(pendingPurge);
+ Serial.tx.clear(); testMillis+=1001; serviceSerial(testMillis); assert(!pendingPurge);
+ assert(Serial.tx.find("CMD duration")==std::string::npos);
+ std::cout<<"PASS: gateway parsing, time sync, bounded publication, stale availability, remote freshness/retention/fragments/replay/UART/ack\n";
 }

@@ -4,7 +4,12 @@
 
 // D2 RX <- adapter TX; D3 TX -> adapter RX. D7/D8/D13 untouched.
 SoftwareSerial espLink(2, 3);
-const char UNO_FIRMWARE[] = "1.3.0";
+const char UNO_FIRMWARE[] = "1.4.0";
+void startPurge(unsigned long currentMillis);
+uint32_t lastRemoteRequest = 0, remoteBootFloor = 0;
+char commandAck[64] = "";
+uint32_t configuredPurgeDurationMs = DEFAULT_PURGE_DURATION_MS;
+bool configReportPending = true;
 Uptime controllerUptime;
 LineReader<40> commandLine;
 uint32_t completedPurges = 0, lastPurgeDuration = 0;
@@ -54,9 +59,35 @@ void serviceTelemetry(uint32_t now, bool startup, bool active,
           parseDecimal(commandLine.data + 5, epoch)) {
         handleTimeSync(epoch);
         clockReportPending = true;
+        if (isClockValid() && !remoteBootFloor) remoteBootFloor = getCurrentEpoch() + 2;
       }
-      // CMD purge intentionally has NO execution path. Future commands must
-      // pass local interlocks; never accept pin states or durations from UART.
+      bool durationCommand = !strncmp(commandLine.data, "CMD duration ", 13);
+      uint32_t requestedDuration = 0;
+      if ((durationCommand || !strncmp(commandLine.data, "CMD purge ", 10)) &&
+          parseRemoteRequest(commandLine.data + (durationCommand ? 13 : 10),
+                             durationCommand, epoch, requestedDuration)) {
+        const char* result;
+        uint32_t current = getCurrentEpoch();
+        if (isClockValid() && !remoteBootFloor) remoteBootFloor = current + 2;
+        if (!isClockValid()) result = "clock_invalid";
+        else if (epoch <= remoteBootFloor || epoch <= lastRemoteRequest) result = "replay";
+        else if (int64_t(current) - epoch > 10 || int64_t(epoch) - current > 2) result = "expired";
+        else {
+          // Rejected requests are consumed, never queued for later actuation.
+          lastRemoteRequest = epoch;
+          if (durationCommand) {
+            if (!validPurgeDuration(requestedDuration)) result = "out_of_range";
+            else {
+              configuredPurgeDurationMs = requestedDuration;
+              configReportPending = true; result = "accepted";
+            }
+          } else if (startup) result = "startup";
+          else if (active) result = "busy";
+          else { startPurge(millis()); active = true; result = "accepted"; }
+        }
+        snprintf(commandAck, sizeof commandAck, "ACK %s %lu %s\n",
+                 durationCommand ? "duration" : "purge", (unsigned long)epoch, result);
+      }
     }
   }
   if (!telemetryTx[telemetryPos]) {
@@ -65,6 +96,8 @@ void serviceTelemetry(uint32_t now, bool startup, bool active,
     if (!processClock.clockValid && (!timeRequestSent || uint32_t(now-lastTimeRequest)>=30000)) {
       strcpy(telemetryTx, "GET TIME\n");
       timeRequestSent = true; lastTimeRequest = now;
+    } else if (commandAck[0]) {
+      strcpy(telemetryTx, commandAck); commandAck[0] = 0;
     } else if (completionPending) {
       snprintf(telemetryTx, sizeof telemetryTx,
         "EVENT purge_complete count=%lu duration_ms=%lu success=%s epoch=%lu time_valid=%u\n",
@@ -79,7 +112,11 @@ void serviceTelemetry(uint32_t now, bool startup, bool active,
         (unsigned long)completedPurges, (unsigned long)lastPurgeDuration,
         measurements.successValid ? (measurements.success ? "true" : "false") : "unknown", UNO_FIRMWARE,
         (unsigned long)lastPurgeEpoch, lastPurgeTimeValid ? 1U : 0U);
-      lastSnapshot = now; statusRequested = false; clockReportPending = true;
+      lastSnapshot = now; statusRequested = false; clockReportPending = true; configReportPending = true;
+    } else if (configReportPending) {
+      snprintf(telemetryTx, sizeof telemetryTx, "CONFIG duration_ms=%lu\n",
+               (unsigned long)configuredPurgeDurationMs);
+      configReportPending = false;
     } else if (clockReportPending) {
       snprintf(telemetryTx, sizeof telemetryTx,
         "CLOCK valid=%u sync_epoch=%lu sync_age=%lu correction=%ld\n",

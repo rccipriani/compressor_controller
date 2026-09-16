@@ -80,6 +80,7 @@ int main() {
   // Simulate a fresh controller boot with the manual button held.
   testMillis=0; processClock=ControllerClock(); controllerUptime=Uptime();
   startupTestActive=true; purgeActive=false; completedPurges=0;
+  lastRemoteRequest=0; remoteBootFloor=0;
   stableButtonState=HIGH; lastButtonReading=HIGH;
   lastButtonChangeMillis=0; telemetryTx[0]=0; telemetryPos=0;
   lastLineEnd=0; lastTxByte=0; lastSnapshot=0;
@@ -89,5 +90,51 @@ int main() {
   start=purgeStartMillis;
   until(start+5001);
   assert(completedPurges==1 && !lastPurgeTimeValid && lastPurgeEpoch==0);
-  std::cout<<"PASS: clock multi-rollover/corrections, framing/overflow, startup, debounce, busy/held button, remote disabled, timestamp, automatic timer, shutoff rollover\n";
+  // Remote commands require clock validity and a post-boot timestamp.
+  pinStates[BUTTON_PIN]=HIGH; runFor(60);
+  espLink.inject("CMD purge 1800000000\n"); runFor(100); assert(!purgeActive);
+  espLink.inject("TIME 1800000000\n"); runFor(3100);
+  espLink.inject("CMD purge 1800000003\n"); runFor(100);
+  assert(purgeActive && pinStates[RELAY_PIN]==HIGH);
+  start=purgeStartMillis; assert(previousPurgeMillis==start);
+  espLink.inject("CMD purge 1800000003\nCMD purge 1800000004\n"); runFor(100);
+  assert(purgeStartMillis==start && lastRemoteRequest==1800000004);
+  until(start+5001); assert(!purgeActive && lastPurgeDuration==5000);
+  espLink.inject("CMD purge 1800000003\nCMD purge 1800000004\nCMD purge 1900000000\n");
+  runFor(100); assert(!purgeActive && previousPurgeMillis==start);
+  espLink.inject("CMD purge 1800000008\n"); runFor(100); assert(purgeActive);
+  // A configuration change during a cycle must not alter its deadline.
+  start=purgeStartMillis;
+  espLink.inject("CMD duration 1800000009 1000\n"); runFor(100);
+  assert(configuredPurgeDurationMs==1000 && activePurgeDurationMs==5000);
+  assert(previousPurgeMillis==start);
+  until(start+4999); assert(purgeActive);
+  until(start+5001); assert(!purgeActive && lastPurgeDuration==5000);
+  espLink.inject("CMD purge 1800000013\n"); runFor(100);
+  assert(purgeActive && activePurgeDurationMs==1000);
+  start=purgeStartMillis;
+  until(start+999); assert(purgeActive);
+  until(start+1001); assert(!purgeActive && lastPurgeDuration==1000);
+  espLink.inject("CMD duration 1800000014 999\nCMD duration 1800000015 30001\n");
+  runFor(100); assert(configuredPurgeDurationMs==1000 && !purgeActive);
+  // Malformed commands and replay cannot change the setpoint.
+  espLink.inject("CMD duration 1800000015 30000\nCMD duration 1800000016 -1\nCMD duration 1800000016 1000 extra\n");
+  runFor(100); assert(configuredPurgeDurationMs==1000);
+  runFor(2000);
+  espLink.inject("CMD duration 1800000016 30000\n"); runFor(100);
+  assert(configuredPurgeDurationMs==30000);
+  pinStates[BUTTON_PIN]=LOW; runFor(60);
+  assert(purgeActive && activePurgeDurationMs==30000);
+  start=purgeStartMillis;
+  until(start+29999); assert(purgeActive);
+  until(start+30001); assert(!purgeActive && lastPurgeDuration==30000);
+  pinStates[BUTTON_PIN]=HIGH; runFor(60);
+  espLink.inject("CMD duration 1800000020 5000\n"); runFor(100);
+  assert(configuredPurgeDurationMs==30000); // stale even though newer than last ID
+  testMillis=previousPurgeMillis+INTERVAL_MS; loop();
+  assert(purgeActive && activePurgeDurationMs==30000);
+  // Direct calls also enforce startup interlock.
+  purgeActive=false; startupTestActive=true; digitalWrite(RELAY_PIN,LOW);
+  startPurge(testMillis); assert(!purgeActive && pinStates[RELAY_PIN]==LOW);
+  std::cout<<"PASS: clock, framing, startup, debounce, remote validity/replay/busy/duration/schedule, timestamp, automatic timer, rollover\n";
 }

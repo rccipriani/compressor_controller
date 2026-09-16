@@ -1,8 +1,8 @@
 // Project: Compressor Auto Purge Controller
 // Author: Robert Cipriani
-// Last Updated: 2026-09-10
+// Last Updated: 2026-09-16
 //
-// v1.3.0
+// v1.4.0
 //
 // Hardware:
 // - Arduino UNO
@@ -39,7 +39,7 @@
 // v1.1.0 Non-blocking state machine and status LED support
 // v1.1.1 Ignore button during startup test; single-point 24-hour timer reset in startPurge()
 
-// v1.3.0 Supervisory telemetry; remote purge remains disabled.
+// v1.4.0 MQTT purge and bounded duration configuration.
 #include "purge_telemetry/UnoTelemetry.h"
 
 const byte RELAY_PIN = 7;
@@ -48,7 +48,7 @@ const byte LED_PIN = 13;
 
 const unsigned long HOURS_TO_MS = 3600000UL;          // conversion factor: hours to milliseconds
 const unsigned long INTERVAL_MS = 24UL * HOURS_TO_MS; // 24-hour interval between automatic purges
-const unsigned long PURGE_TIME_MS = 5000UL;           // purge duration: 5 seconds
+unsigned long activePurgeDurationMs = DEFAULT_PURGE_DURATION_MS; // latched at cycle start
 const unsigned long DEBOUNCE_MS = 50UL;               // button debounce time
 const unsigned long STARTUP_TEST_MS = 1000UL;         // startup functional test duration: 1 second
 
@@ -168,7 +168,7 @@ void loop()
 
     if (purgeActive)
     {
-        if (currentMillis - purgeStartMillis >= PURGE_TIME_MS)
+        if (currentMillis - purgeStartMillis >= activePurgeDurationMs)
         {
             digitalWrite(RELAY_PIN, LOW);
 
@@ -194,13 +194,13 @@ void loop()
     }
     serviceTelemetry(millis(), startupTestActive, purgeActive,
                      startupTestActive ? startupTestStartMillis : purgeStartMillis,
-                     startupTestActive ? STARTUP_TEST_MS : PURGE_TIME_MS);
+                     startupTestActive ? STARTUP_TEST_MS : activePurgeDurationMs);
 }
 
 void startPurge(unsigned long currentMillis)
 {
-    // Ignore requests while already purging
-    if (purgeActive)
+    // Apply local interlocks to every request source.
+    if (startupTestActive || purgeActive)
     {
         return;
     }
@@ -208,8 +208,9 @@ void startPurge(unsigned long currentMillis)
     statusRequested = true;
     purgeActive = true;
     purgeStartMillis = currentMillis;
+    activePurgeDurationMs = configuredPurgeDurationMs;
 
-    // Any purge (automatic or manual) restarts the 24-hour interval
+    // Any purge (automatic, manual or remote) restarts the 24-hour interval
     previousPurgeMillis = currentMillis;
 
     digitalWrite(RELAY_PIN, HIGH);

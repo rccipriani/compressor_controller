@@ -24,3 +24,11 @@ struct FakeSerial {
 inline void configTime(const char*,const char*){}
 inline void yield(){}
 inline tm* gmtime_r(const time_t* t,tm* out){return gmtime_s(out,t)==0?out:nullptr;}
+
+// Deterministic SNTP clock for freshness and replay regression tests.
+inline time_t testTime(time_t* out) {
+  time_t value=1800000000UL + testMillis/1000;
+  if (out) *out=value;
+  return value;
+}
+#define time testTime
