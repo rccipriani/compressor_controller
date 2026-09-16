@@ -49,7 +49,7 @@ inline bool parseDecimal(const char* text, uint32_t& value) {
 }
 
 // Shared bounds are enforced again by the physical controller.
-const uint32_t DEFAULT_PURGE_DURATION_MS = 5000;
+const uint32_t DEFAULT_PURGE_DURATION_MS = 10000;
 const uint32_t MIN_PURGE_DURATION_MS = 1000;
 const uint32_t MAX_PURGE_DURATION_MS = 30000;
 inline bool validPurgeDuration(uint32_t value) {

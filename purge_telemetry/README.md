@@ -1,6 +1,6 @@
 # Compressor purge telemetry
 
-The Uno remains the only physical controller. D7 relay (active HIGH), D8 manual button (INPUT_PULLUP, pressed LOW), D13 LED, 1-second startup test, 5-second default purge (remotely configurable from 1 to 30 seconds), 24-hour interval, 50-ms debounce and LED intervals are unchanged. Startup resets the interval at test completion; automatic/manual/remote cycles reset it at cycle start. A held button at power-up still triggers a full purge after startup and debounce. A press during a purge is consumed without extending that purge. Startup is not counted as a normal purge.
+The Uno remains the only physical controller. D7 relay (active HIGH), D8 manual button (INPUT_PULLUP, pressed LOW), D13 LED, 1-second startup test, 10-second default purge (remotely configurable from 1 to 30 seconds), 24-hour interval, 50-ms debounce and LED intervals are unchanged. Startup resets the interval at test completion; automatic/manual/remote cycles reset it at cycle start. A held button at power-up still triggers a full purge after startup and debounce. A press during a purge is consumed without extending that purge. Startup is not counted as a normal purge.
 
 ## Files and dependencies
 
@@ -36,7 +36,7 @@ ESP normal boot requires EN/CH_PD and reset HIGH, GPIO0 HIGH and GPIO2 HIGH (nor
 
 ## UART protocol
 
-9600 baud, 8N1, ASCII, LF terminator (CRLF accepted). Fields are ordered for this firmware pair (Uno 1.4.0, ESP 1.2.0). Unknown message types, malformed fields, oversized lines, binary characters and partial lines timing out after 2 seconds are discarded. Receivers recover at the next LF. Add new record types for future sensor data; do not silently append fields to STAT without updating its parser.
+9600 baud, 8N1, ASCII, LF terminator (CRLF accepted). Fields are ordered for this firmware pair (Uno 1.4.1, ESP 1.2.0). Unknown message types, malformed fields, oversized lines, binary characters and partial lines timing out after 2 seconds are discarded. Receivers recover at the next LF. Add new record types for future sensor data; do not silently append fields to STAT without updating its parser.
 
 Examples:
 
@@ -55,7 +55,7 @@ ACK duration 1789088336 accepted
 CONFIG duration_ms=7500
 ```
 
-STAT is sent every 5 seconds and requested at state changes, followed by CLOCK diagnostics; EVENT is a best-effort completion record. UART uptime is seconds, duration is milliseconds, count is completed automatic/manual/remote cycles since Uno reset. No EEPROM persistence is claimed. STARTUP reports purge/active=true because the valve is energized even though it is not a counted cycle.
+STAT is sent every 5 seconds and requested at state changes, followed by CLOCK diagnostics; EVENT is a best-effort completion record. UART uptime is seconds, duration is milliseconds, count is completed automatic/manual/remote cycles since Uno reset. Counters and timestamps remain RAM-only. STARTUP reports purge/active=true because the valve is energized even though it is not a counted cycle.
 
 CMD status requests a fresh snapshot. CMD purge carries a 10-digit UTC Unix timestamp used as its request ID. CMD duration carries the timestamp followed by a duration in integer milliseconds. The Uno checks clock validity, freshness, increasing request IDs, and local purge interlocks. It sends ACK with the request kind, ID and result; CONFIG reports the current duration after each STAT and after accepted changes. CONFIG does not extend STAT's existing fields.
 
@@ -125,7 +125,7 @@ Reboot behavior:
 - WiFi disappears: local operation/time extrapolation continue. On return ESP refreshes NTP and sends corrected time.
 - Uno alone restarts: its clock/history reset; GET TIME obtains the already-synchronized ESP clock, typically within the first telemetry exchange (30-second retry if lost).
 
-No EEPROM writes or persistence are added. Future motor/fault records can use the same epoch-plus-valid pattern in ControllerClock.h. There is no long-outage precision guarantee: both clocks can drift without new NTP information.
+Only the configured duration is persisted in EEPROM; clock and history remain RAM-only. Future motor/fault records can use the same epoch-plus-valid pattern in ControllerClock.h. There is no long-outage precision guarantee: both clocks can drift without new NTP information.
 
 ESP retries WiFi every 30 seconds and MQTT at 5-second intervals, without rebooting or blocking for connection. It caches only the latest state and completion, coalescing intermediate history during outages. Power loss clears this RAM. After ESP reboot, Uno snapshots restore history while the Uno remains powered. A full Uno power loss clears history; no boot identity or event audit log is implemented.
 
@@ -139,7 +139,7 @@ ControllerMeasurements in UnoTelemetry.h reserves validity and values for pressu
 
 Flash both updated sketches together. The Uno remains responsible for the relay and all timing. MQTT purge uses the same action as the local button, resets the 24-hour schedule, and is rejected during startup or an active cycle. There are no pressure/motor interlocks yet because those sensors are not implemented.
 
-The configured duration defaults to **5000 ms**, accepts **1000 through 30000 ms**, and applies to subsequent automatic, manual and MQTT cycles. A cycle latches its duration at start; changing the setting cannot shorten or extend it. The one-second startup test is unchanged. Settings are RAM-only: an Uno reboot restores 5000 ms, while an ESP reboot recovers the current setting from CONFIG. Setting duration alone does not energize the relay or reset the automatic schedule. `purge/last_duration` continues to report the measured duration of the most recently completed cycle.
+The configured duration defaults to **10000 ms**, accepts **1000 through 30000 ms**, and applies to subsequent automatic, manual and MQTT cycles. A cycle latches its duration at start; changing the setting cannot shorten or extend it. The one-second startup test is unchanged. The Uno restores the saved duration from EEPROM at boot; blank or invalid records fall back to 10000 ms. An ESP reboot recovers the current setting from CONFIG. Setting duration alone does not energize the relay or reset the automatic schedule. `purge/last_duration` continues to report the measured duration of the most recently completed cycle.
 
 Commands use QoS0 subscriptions and must be non-retained. Use the publisher's current UTC Unix seconds as the 10-digit request ID, and a strictly newer ID for each command across BOTH command topics. Both boards reject timestamps older than 10 seconds or more than 2 seconds ahead; the gateway accepts at most one command per five seconds. Both boards need synchronized clocks. The Uno also requires the ID to be later than its initial synchronization epoch plus two seconds, rejecting requests originating before its boot. Wait at least three seconds after initial synchronization before commanding it. Retained, fragmented, malformed, unavailable-controller, stale, duplicate and out-of-range gateway requests are discarded.
 
@@ -169,13 +169,13 @@ Confirm `command/duration_result` reports the matching ID with `accepted`, then 
 
 1. Start with the physical valve disconnected, a test LED or meter on the existing relay driver, and an adequately powered ESP adapter. Verify voltages and UART directions.
 2. Build both targets with build.ps1. Program Uno and ESP separately; restore UART wiring afterward. Set local config placeholders first.
-3. With ESP disconnected, verify startup HIGH for 1 second; afterward button LOW for at least 50 ms triggers 5 seconds HIGH. Verify holding/releasing, bouncing, power-up held button, and presses during an active purge. Confirm normal/fast LED intervals remain 1000/125 ms per toggle.
+3. With ESP disconnected, verify startup HIGH for 1 second; afterward button LOW for at least 50 ms triggers the configured duration HIGH. Verify holding/releasing, bouncing, power-up held button, and presses during an active purge. Confirm normal/fast LED intervals remain 1000/125 ms per toggle.
 4. Measure relay timings with a scope/logic analyzer with telemetry connected and disconnected, including noisy/malformed UART input. Verify malformed or replayed UART commands cannot cause early shutoff, retrigger, or timer reset.
 5. Watch compressor/purge_controller/# using an MQTT client. Check versions, uptimes, RSSI, state, count and availability. Startup should not increment count; a finished manual cycle should increment it once. Success and sensor values must remain unavailable.
 6. Let NTP synchronize, finish a cycle, and check last_time against UTC and last_duration against the measured cycle. Repeat after BOTH boards cold boot with NTP blocked: control works, time/valid and last_time_valid remain false. An ESP-only reboot must preserve the Uno clock/history.
 7. Drop WiFi and stop the broker separately during idle and during purge. Operate the manual button; timing remains unchanged. Restore connectivity and verify reconnect/current state. Remove ESP power to observe retained LWT=false after broker detection.
 8. Disconnect Uno TX while ESP stays online. After 15 seconds plus refresh, controller/available=false and state UNKNOWN. Restore it and confirm recovery.
-9. Publish non-retained request to command/status; confirm fresh UART STAT. After clock synchronization, send a fresh timestamp to command/purge and verify exactly one configured cycle. Replay the same timestamp and send retained, stale, malformed and busy requests: none may start another cycle or extend the current one. Set duration to 1000 and 30000 ms, verify rejection of 999 and 30001, and measure actual relay timing. Change duration mid-cycle and verify only the next cycle uses it. Reboot the Uno and verify the setting returns to 5000 ms.
+9. Publish non-retained request to command/status; confirm fresh UART STAT. After clock synchronization, send a fresh timestamp to command/purge and verify exactly one configured cycle. Replay the same timestamp and send retained, stale, malformed and busy requests: none may start another cycle or extend the current one. Set duration to 1000 and 30000 ms, verify rejection of 999 and 30001, and measure actual relay timing. Change duration mid-cycle and verify only the next cycle uses it. Wait until idle, reboot the Uno and verify the configured duration is restored. With blank EEPROM, verify the default is 10000 ms.
 10. Reset each board separately and check documented counter/timestamp recovery. Test multiple offline cycles: only the latest state is retained, not a history.
 11. Verify the real 24-hour automatic interval and manual reset of that schedule. A temporary bench-only shortened interval can speed initial testing; restore 24 hours and rebuild before installation. Exercise millis rollover with a test harness.
 12. Only after electrical and timing checks pass, reconnect the valve for a supervised functional test; physical purge success still requires observation until sensing exists.
@@ -224,3 +224,9 @@ Create .purge-build first, or run build.ps1. These mocks verify application beha
 - Current controller and gateway host harnesses compile with MSVC and pass. They exercise clock rollover/corrections, framing, startup/debounce, automatic timing, remote freshness/replay/busy behavior, acknowledgment forwarding, duration bounds, reported configuration, command expiry, and duration changes during active purges.
 - Current Arduino board builds could not run: Windows Application Control blocked the installed `arduino-cli.exe`. The older firmware's successful compilation does not verify this revision's flash/RAM usage or board compatibility.
 - No boards were flashed and no real broker, UART, relay or valve test was performed. Complete the bench procedure after building both updated targets.
+
+## EEPROM duration storage
+
+DurationSettings.h reserves EEPROM bytes 0–15 for two versioned records. Saves alternate slots, validate the duration and inverted fields, and write a commit marker last. If a save is interrupted, boot uses the previous valid record (or the 10000 ms default if none exists). Unchanged settings cause no writes; EEPROM.update skips matching bytes. EEPROM has finite endurance, so use duration commands for configuration rather than continuous control.
+
+Writes run only while startup and purge are inactive. A duration accepted during a purge is applied in RAM immediately, then saved after the valve closes. The MQTT accepted acknowledgment confirms the RAM update, not durable storage; power loss before the idle save loses that pending change. The current cycle keeps its latched duration. Counters, clock state, and request IDs are not written to EEPROM.

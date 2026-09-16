@@ -2,7 +2,7 @@
 // Author: Robert Cipriani
 // Last Updated: 2026-09-16
 //
-// v1.4.0
+// v1.4.1
 //
 // Hardware:
 // - Arduino UNO
@@ -82,6 +82,7 @@ void setup()
 
     // Ensure relay starts OFF
     digitalWrite(RELAY_PIN, LOW);
+    configuredPurgeDurationMs = durationSettings.load();
 
     // Startup functional test
     // NOTE:
@@ -192,6 +193,7 @@ void loop()
 
         digitalWrite(LED_PIN, ledState);
     }
+    if (!startupTestActive && !purgeActive) durationSettings.save(configuredPurgeDurationMs);
     serviceTelemetry(millis(), startupTestActive, purgeActive,
                      startupTestActive ? startupTestStartMillis : purgeStartMillis,
                      startupTestActive ? STARTUP_TEST_MS : activePurgeDurationMs);

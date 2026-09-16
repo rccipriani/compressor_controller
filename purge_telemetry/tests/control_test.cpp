@@ -13,6 +13,27 @@ void runFor(uint32_t duration) {
 void until(uint32_t point) { while(testMillis<point) { loop(); ++testMillis; } }
 
 int main() {
+  assert(DEFAULT_PURGE_DURATION_MS==10000);
+  assert(durationSettings.load()==10000); // erased EEPROM
+  durationSettings.save(7500);
+  DurationSettings reboot; assert(reboot.load()==7500);
+  int writes=EEPROM.writes; reboot.save(7500); assert(EEPROM.writes==writes);
+  reboot.save(999); assert(EEPROM.writes==writes);
+  FakeEEPROM snapshot=EEPROM;
+  // Simulate loss of power at each write boundary, including commit.
+  for (int cut=0; cut<=9; ++cut) {
+    EEPROM=snapshot; EEPROM.calls=0; EEPROM.failAfter=cut;
+    DurationSettings writer; assert(writer.load()==7500);
+    try { writer.save(12000); } catch (int) {}
+    DurationSettings reader;
+    assert(reader.load()==(cut<9 ? 7500 : 12000));
+  }
+  EEPROM=FakeEEPROM(); durationSettings=DurationSettings();
+  durationSettings.save(7500); durationSettings.save(12000);
+  EEPROM.bytes[11]^=1; // corrupted newer record falls back to previous
+  assert(reboot.load()==7500);
+  EEPROM.bytes[3]^=1; assert(reboot.load()==10000);
+  EEPROM=FakeEEPROM(); durationSettings=DurationSettings();
   ControllerClock c;
   assert(!c.clockValid && c.epoch()==0);
   assert(!c.synchronize(0,0) && !c.synchronize(1699999999,0));
@@ -40,6 +61,8 @@ int main() {
 
   pinStates[BUTTON_PIN]=HIGH;
   setup();
+  assert(configuredPurgeDurationMs==10000);
+  configuredPurgeDurationMs=5000;
   assert(pinStates[RELAY_PIN]==HIGH);
   until(999); assert(startupTestActive && pinStates[RELAY_PIN]==HIGH);
   until(1001); assert(!startupTestActive && pinStates[RELAY_PIN]==LOW);
@@ -85,6 +108,7 @@ int main() {
   lastButtonChangeMillis=0; telemetryTx[0]=0; telemetryPos=0;
   lastLineEnd=0; lastTxByte=0; lastSnapshot=0;
   pinStates[BUTTON_PIN]=LOW; setup();
+  configuredPurgeDurationMs=5000;
   until(999); assert(startupTestActive && !purgeActive);
   until(1060); assert(!startupTestActive && purgeActive);
   start=purgeStartMillis;
@@ -105,8 +129,10 @@ int main() {
   espLink.inject("CMD purge 1800000008\n"); runFor(100); assert(purgeActive);
   // A configuration change during a cycle must not alter its deadline.
   start=purgeStartMillis;
+  int writesBeforeActive=EEPROM.writes;
   espLink.inject("CMD duration 1800000009 1000\n"); runFor(100);
   assert(configuredPurgeDurationMs==1000 && activePurgeDurationMs==5000);
+  assert(EEPROM.writes==writesBeforeActive);
   assert(previousPurgeMillis==start);
   until(start+4999); assert(purgeActive);
   until(start+5001); assert(!purgeActive && lastPurgeDuration==5000);
@@ -115,6 +141,7 @@ int main() {
   start=purgeStartMillis;
   until(start+999); assert(purgeActive);
   until(start+1001); assert(!purgeActive && lastPurgeDuration==1000);
+  DurationSettings restored; assert(restored.load()==1000);
   espLink.inject("CMD duration 1800000014 999\nCMD duration 1800000015 30001\n");
   runFor(100); assert(configuredPurgeDurationMs==1000 && !purgeActive);
   // Malformed commands and replay cannot change the setpoint.

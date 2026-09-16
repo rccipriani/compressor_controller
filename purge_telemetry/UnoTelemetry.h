@@ -1,10 +1,11 @@
 #pragma once
 #include <SoftwareSerial.h>
 #include "ControllerClock.h"
+#include "DurationSettings.h"
 
 // D2 RX <- adapter TX; D3 TX -> adapter RX. D7/D8/D13 untouched.
 SoftwareSerial espLink(2, 3);
-const char UNO_FIRMWARE[] = "1.4.0";
+const char UNO_FIRMWARE[] = "1.4.1";
 void startPurge(unsigned long currentMillis);
 uint32_t lastRemoteRequest = 0, remoteBootFloor = 0;
 char commandAck[64] = "";

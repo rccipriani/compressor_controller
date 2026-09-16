@@ -12,7 +12,7 @@ Copy-Item -LiteralPath (Join-Path $repo "airtankpurge.ino") -Destination $uno -F
 # Shared headers must retain their relative layout for the Uno.
 $headers = Join-Path $uno "purge_telemetry"
 New-Item -ItemType Directory -Force (Join-Path $headers "esp01") | Out-Null
-foreach ($name in @("UnoTelemetry.h", "ControllerClock.h")) {
+foreach ($name in @("UnoTelemetry.h", "ControllerClock.h", "DurationSettings.h")) {
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $headers -Force
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "esp01/Protocol.h") -Destination (Join-Path $headers "esp01") -Force
